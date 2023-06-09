@@ -10,8 +10,8 @@ from ConfigSpace import Configuration
 
 from smac.constants import MAXINT
 from smac.intensifier.abstract_intensifier import AbstractIntensifier
-from smac.runhistory import TrialInfo
-from smac.runhistory.dataclasses import InstanceSeedBudgetKey
+from smac.runhistory import TrialInfo, TrialKey
+from smac.runhistory.dataclasses import InstanceSeedBudgetKey, StatusType
 from smac.runhistory.errors import NotEvaluatedError
 from smac.scenario import Scenario
 from smac.utils.configspace import get_config_hash
@@ -95,6 +95,8 @@ class SuccessiveHalving(AbstractIntensifier):
         self._min_budget = self._scenario.min_budget
         self._max_budget = self._scenario.max_budget
 
+        self._Rt = eta*self._min_budget
+        self._Kt = math.floor(math.log(self._Rt/self._min_budget, eta))
         self._t = 0
 
     @property
@@ -116,7 +118,7 @@ class SuccessiveHalving(AbstractIntensifier):
 
         # States
         # dict[tuple[bracket, stage], list[tuple[seed to shuffle instance-seed keys, list[config_id]]]
-        self._tracker: dict[int, dict[Configuration, float]] = defaultdict(list)
+        self._tracker: dict[int, dict[Configuration, TrialInfo]] = defaultdict(dict)
 
     def __post_init__(self) -> None:
         """Post initialization steps after the runhistory has been set."""
@@ -377,18 +379,26 @@ class SuccessiveHalving(AbstractIntensifier):
         while True:
 
             # TODO get_job()
-            for rung in reversed(range(self._t)):
-                candidates = self._tracker[(self._get_next_bracket(), rung)]
-
+            config, rung = self._get_job()
+            is_key = self.get_instance_seed_keys_of_interest()[0]
+            ti = TrialInfo(config, is_key.instance, is_key.seed, self._min_budget * (self._eta**rung))
+            self._tracker[rung][config] = ti
             # TODO yield Job
+            yield ti
 
             # TODO check if rung update is possible
 
-
+            config_ranking = self._top_k(self._Kt, len(self._tracker[self._Kt].keys()))
+            config_ranking_below = self._top_k(self._Kt-1, len(self._tracker[self._Kt-1].keys()))[:len(config_ranking)]
+            for config, config_below in zip(config_ranking, config_ranking_below):
+                if config != config_below:
+                    self._t += 1
+                    self._Rt = (self._eta**self._t) * self._eta * self._min_budget
+                    self._Kt = math.floor(math.log(self._Rt/self._min_budget, self._eta))
 
             # Since we yielded something before, we want to go back as long as we do not find any trials anymore
-            if update:
-                continue
+            #if update:
+            #    continue
 
             # TODO: Aggressive progressing without knowing how well trials performed
             # Idea: Don't add constantly new batches (see ASHA)
@@ -412,6 +422,27 @@ class SuccessiveHalving(AbstractIntensifier):
                 f"Added {len(configs)} new configs to bracket {next_bracket} stage 0 with shuffle seed {next_seed}."
             )
 
+    def _get_job(self):
+        for rung in reversed(range(self._Kt)):
+            candidates = self._top_k(rung, math.floor(len(self._tracker[rung].keys())/self._eta))
+            for cand in candidates:
+                if cand not in self._tracker[rung+1]:
+                    return cand[0], rung+1
+        return next(self.config_generator), 0
+
+
+    def _top_k(self, rung, amount):
+        rung_dict = self._tracker[rung]
+        ranking = []
+        for entry in rung_dict:
+            config_id = self.runhistory.get_config_id(entry)
+            tk = TrialKey(config_id, rung_dict[entry].instance, rung_dict[entry].seed, rung_dict[entry].budget)
+            value = self.runhistory[tk]
+            if value.status == StatusType.SUCCESS:
+                ranking.append(tuple(entry, value.cost))
+        return sorted(ranking, lambda x : x[1])[:amount]
+
+    
     def _get_instance_seed_budget_keys_by_stage(
         self,
         bracket: int,
