@@ -4,7 +4,7 @@ from typing import Any, Iterator
 
 import math
 from collections import defaultdict
-
+import json
 import numpy as np
 from ConfigSpace import Configuration
 
@@ -25,7 +25,7 @@ __license__ = "3-clause BSD"
 logger = get_logger(__name__)
 
 
-class SuccessiveHalving(AbstractIntensifier):
+class PASHA(AbstractIntensifier):
     """
     Implementation of Succesive Halving supporting multi-fidelity, multi-objective, and multi-processing.
     Internally, a tracker keeps track of configurations and their bracket and stage.
@@ -70,14 +70,14 @@ class SuccessiveHalving(AbstractIntensifier):
     """
 
     def __init__(
-        self,
-        scenario: Scenario,
-        eta: int = 3,
-        n_seeds: int = 1,
-        instance_seed_order: str | None = "shuffle_once",
-        max_incumbents: int = 10,
-        incumbent_selection: str = "highest_observed_budget",
-        seed: int | None = None,
+            self,
+            scenario: Scenario,
+            eta: int = 3,
+            n_seeds: int = 1,
+            instance_seed_order: str | None = "shuffle_once",
+            max_incumbents: int = 10,
+            incumbent_selection: str = "highest_observed_budget",
+            seed: int | None = None,
     ):
         super().__init__(
             scenario=scenario,
@@ -95,8 +95,8 @@ class SuccessiveHalving(AbstractIntensifier):
         self._min_budget = self._scenario.min_budget
         self._max_budget = self._scenario.max_budget
 
-        self._Rt = eta*self._min_budget
-        self._Kt = math.floor(math.log(self._Rt/self._min_budget, eta))
+        self._Rt = eta * self._min_budget
+        self._Kt = math.floor(math.log(self._Rt / self._min_budget, eta))
         self._t = 0
 
     @property
@@ -119,6 +119,9 @@ class SuccessiveHalving(AbstractIntensifier):
         # States
         # dict[tuple[bracket, stage], list[tuple[seed to shuffle instance-seed keys, list[config_id]]]
         self._tracker: dict[int, dict[Configuration, TrialInfo]] = defaultdict(dict)
+        #self._Rt = self._eta * self._min_budget
+        #self._Kt = math.floor(math.log(self._Rt / self._min_budget, self._eta))
+        #self._t = 0
 
     def __post_init__(self) -> None:
         """Post initialization steps after the runhistory has been set."""
@@ -189,12 +192,12 @@ class SuccessiveHalving(AbstractIntensifier):
 
     @staticmethod
     def _compute_configs_and_budgets_for_stages(
-        eta: int, max_budget: float | int, max_iter: int, s_max: int | None = None
+            eta: int, max_budget: float | int, max_iter: int, s_max: int | None = None
     ) -> tuple[list[int], list[int]]:
         if s_max is None:
             s_max = max_iter
 
-        n_initial_challengers = math.ceil((eta**max_iter) * (s_max + 1) / (max_iter + 1))
+        n_initial_challengers = math.ceil((eta ** max_iter) * (s_max + 1) / (max_iter + 1))
 
         # How many configs in each stage
         lin_space = -np.linspace(0, max_iter, max_iter + 1)
@@ -209,30 +212,32 @@ class SuccessiveHalving(AbstractIntensifier):
 
     def get_state(self) -> dict[str, Any]:  # noqa: D102
         # Replace config by dict
-        tracker: dict[str, list[tuple[int | None, list[dict]]]] = defaultdict(list)
+        tracker: dict[int, dict[str, dict]] = defaultdict(dict)
         for key in list(self._tracker.keys()):
-            for seed, configs in self._tracker[key]:
-                # We have to make key serializable
-                new_key = f"{key[0]},{key[1]}"
-                tracker[new_key].append((seed, [config.get_dictionary() for config in configs]))
+            for config in self._tracker[key]:
+                trialinfo_dict = {"config": json.dumps(config.get_dictionary()),
+                                  "instance": self._tracker[key][config].instance,
+                                  "seed": self._tracker[key][config].seed,
+                                  "budget": self._tracker[key][config].budget}
+                tracker[key][json.dumps(config.get_dictionary())] = trialinfo_dict
 
-        return {"tracker": tracker}
+        return {"tracker": tracker, "t": self._t, "K_t": self._Kt, "R_t": self._Rt}
 
     def set_state(self, state: dict[str, Any]) -> None:  # noqa: D102
-        self._tracker = defaultdict(list)
-
+        self._tracker: dict[int, dict[Configuration, TrialInfo]] = defaultdict(dict)
+        self._t = state["t"]
+        self._Kt = state["K_t"]
+        self._Rt = state["R_t"]
         tracker = state["tracker"]
-        for old_key in list(tracker.keys()):
-            keys = [k for k in old_key.split(",")]
-            new_key = (int(keys[0]), int(keys[1]))
-            for seed, config_dicts in tracker[old_key]:
-                seed = None if seed is None else int(seed)
-                self._tracker[new_key].append(
-                    (
-                        seed,
-                        [Configuration(self._scenario.configspace, config_dict) for config_dict in config_dicts],
-                    )
-                )
+
+        for key in list(tracker.keys()):
+            for config_dict in tracker[key]:
+                config = Configuration(self._scenario.configspace, json.load(config_dict))
+
+                self._tracker[key][config] = TrialInfo(config=config,
+                                                       instance=tracker[key][config]["instance"],
+                                                       seed=tracker[key][config]["seed"],
+                                                       budget=tracker[key][config]["budget"])
 
     @property
     def uses_seeds(self) -> bool:  # noqa: D102
@@ -270,11 +275,11 @@ class SuccessiveHalving(AbstractIntensifier):
             logger.debug(message)
 
     def get_trials_of_interest(
-        self,
-        config: Configuration,
-        *,
-        validate: bool = False,
-        seed: int | None = None,
+            self,
+            config: Configuration,
+            *,
+            validate: bool = False,
+            seed: int | None = None,
     ) -> list[TrialInfo]:  # noqa: D102
         is_keys = self.get_instance_seed_keys_of_interest(validate=validate, seed=seed)
         budget = None
@@ -290,7 +295,7 @@ class SuccessiveHalving(AbstractIntensifier):
         return trials
 
     def get_instance_seed_budget_keys(
-        self, config: Configuration, compare: bool = False
+            self, config: Configuration, compare: bool = False
     ) -> list[InstanceSeedBudgetKey]:
         """Returns the instance-seed-budget keys for a given configuration. This method supports ``highest_budget``,
         which only returns the instance-seed-budget keys for the highest budget (if specified). In this case, the
@@ -380,56 +385,44 @@ class SuccessiveHalving(AbstractIntensifier):
 
             # TODO get_job()
             config, rung = self._get_job()
+            if config is None:  # Check if no more Configs are available
+                return
             is_key = self.get_instance_seed_keys_of_interest()[0]
-            ti = TrialInfo(config, is_key.instance, is_key.seed, self._min_budget * (self._eta**rung))
+            ti = TrialInfo(config, is_key.instance, is_key.seed, self._min_budget * (self._eta ** rung))
             self._tracker[rung][config] = ti
             # TODO yield Job
             yield ti
 
+            #TODO set incumbent
+            top = self._top_k(self._Kt, 1)
+            if len(top) < 1:
+                top = self._top_k(self._Kt - 1, 1)
+                if len(top) > 0:
+                    self._incumbents = [top[0][0]]
+            else:
+                self._incumbents = [top[0][0]]
             # TODO check if rung update is possible
 
             config_ranking = self._top_k(self._Kt, len(self._tracker[self._Kt].keys()))
-            config_ranking_below = self._top_k(self._Kt-1, len(self._tracker[self._Kt-1].keys()))[:len(config_ranking)]
+            config_ranking_below = self._top_k(self._Kt - 1, len(self._tracker[self._Kt - 1].keys()))[
+                                   :len(config_ranking)]
             for config, config_below in zip(config_ranking, config_ranking_below):
                 if config != config_below:
                     self._t += 1
-                    self._Rt = (self._eta**self._t) * self._eta * self._min_budget
-                    self._Kt = math.floor(math.log(self._Rt/self._min_budget, self._eta))
-
-            # Since we yielded something before, we want to go back as long as we do not find any trials anymore
-            #if update:
-            #    continue
-
-            # TODO: Aggressive progressing without knowing how well trials performed
-            # Idea: Don't add constantly new batches (see ASHA)
-
-            # If we are running out of trials, we want to add configs to the first stage
-            # We simply add as many configs to the stage as required (_n_configs_in_stage[0])
-            configs = []
-            next_bracket = self._get_next_bracket()
-            for _ in range(self._n_configs_in_stage[next_bracket][0]):
-                try:
-                    config = next(self.config_generator)
-                    configs.append(config)
-                except StopIteration:
-                    # We stop if we don't find any configuration anymore
-                    return
-
-            # We keep track of the seed so we always evaluate on the same instances
-            next_seed = self._get_next_order_seed()
-            self._tracker[(next_bracket, 0)].append((next_seed, configs))
-            logger.debug(
-                f"Added {len(configs)} new configs to bracket {next_bracket} stage 0 with shuffle seed {next_seed}."
-            )
+                    self._Rt = (self._eta ** self._t) * self._eta * self._min_budget
+                    self._Kt = math.floor(math.log(self._Rt / self._min_budget, self._eta))
 
     def _get_job(self):
         for rung in reversed(range(self._Kt)):
-            candidates = self._top_k(rung, math.floor(len(self._tracker[rung].keys())/self._eta))
+            candidates = self._top_k(rung, math.floor(len(self._tracker[rung].keys()) / self._eta))
             for cand in candidates:
-                if cand not in self._tracker[rung+1]:
-                    return cand[0], rung+1
-        return next(self.config_generator), 0
-
+                if cand[0] not in self._tracker[rung + 1]:
+                    return cand[0], rung + 1
+        try:
+            config = next(self.config_generator)
+        except StopIteration:
+            return None, 0
+        return config, 0
 
     def _top_k(self, rung, amount):
         rung_dict = self._tracker[rung]
@@ -439,15 +432,14 @@ class SuccessiveHalving(AbstractIntensifier):
             tk = TrialKey(config_id, rung_dict[entry].instance, rung_dict[entry].seed, rung_dict[entry].budget)
             value = self.runhistory[tk]
             if value.status == StatusType.SUCCESS:
-                ranking.append(tuple(entry, value.cost))
-        return sorted(ranking, lambda x : x[1])[:amount]
+                ranking.append((entry, value.cost))
+        return sorted(ranking, key=lambda x: x[1])[:amount]
 
-    
     def _get_instance_seed_budget_keys_by_stage(
-        self,
-        bracket: int,
-        stage: int,
-        seed: int | None = None,
+            self,
+            bracket: int,
+            stage: int,
+            seed: int | None = None,
     ) -> list[InstanceSeedBudgetKey]:
         """Returns all instance-seed-budget keys (isb keys) for the given stage. Each stage
         is associated with a budget (N). Two possible options:
@@ -485,9 +477,9 @@ class SuccessiveHalving(AbstractIntensifier):
         return isbk
 
     def _get_next_trials(
-        self,
-        config: Configuration,
-        from_keys: list[InstanceSeedBudgetKey],
+            self,
+            config: Configuration,
+            from_keys: list[InstanceSeedBudgetKey],
     ) -> list[TrialInfo]:
         """Returns trials for a given config from a list of instances (instance-seed-budget keys). The returned trials
         have not run or evaluated yet.
@@ -508,11 +500,11 @@ class SuccessiveHalving(AbstractIntensifier):
         return next_trials
 
     def _get_best_configs(
-        self,
-        configs: list[Configuration],
-        bracket: int,
-        stage: int,
-        from_keys: list[InstanceSeedBudgetKey],
+            self,
+            configs: list[Configuration],
+            bracket: int,
+            stage: int,
+            from_keys: list[InstanceSeedBudgetKey],
     ) -> list[Configuration]:
         """Returns the best configurations. The number of configurations is depending on the stage. Raises
         ``NotEvaluatedError`` if not all trials have been evaluated.

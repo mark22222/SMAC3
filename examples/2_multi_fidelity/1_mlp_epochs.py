@@ -40,6 +40,7 @@ from smac import MultiFidelityFacade as MFFacade
 from smac import Scenario
 from smac.facade import AbstractFacade
 from smac.intensifier.hyperband import Hyperband
+from smac.intensifier.pasha import PASHA
 from smac.intensifier.successive_halving import SuccessiveHalving
 
 __copyright__ = "Copyright 2021, AutoML.org Freiburg-Hannover"
@@ -141,7 +142,7 @@ if __name__ == "__main__":
     mlp = MLP()
 
     facades: list[AbstractFacade] = []
-    for intensifier_object in [SuccessiveHalving, Hyperband]:
+    for intensifier_object in [PASHA]:
         # Define our environment variables
         scenario = Scenario(
             mlp.configspace,
