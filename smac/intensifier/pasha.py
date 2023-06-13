@@ -119,9 +119,9 @@ class PASHA(AbstractIntensifier):
         # States
         # dict[tuple[bracket, stage], list[tuple[seed to shuffle instance-seed keys, list[config_id]]]
         self._tracker: dict[int, dict[Configuration, TrialInfo]] = defaultdict(dict)
-        #self._Rt = self._eta * self._min_budget
-        #self._Kt = math.floor(math.log(self._Rt / self._min_budget, self._eta))
-        #self._t = 0
+        # self._Rt = self._eta * self._min_budget
+        # self._Kt = math.floor(math.log(self._Rt / self._min_budget, self._eta))
+        # self._t = 0
 
     def __post_init__(self) -> None:
         """Post initialization steps after the runhistory has been set."""
@@ -260,19 +260,14 @@ class PASHA(AbstractIntensifier):
     def print_tracker(self) -> None:
         """Prints the number of configurations in each bracket/stage."""
         messages = []
-        for (bracket, stage), others in self._tracker.items():
-            counter = 0
-            for _, config_ids in others:
-                counter += len(config_ids)
-
-            if counter > 0:
-                messages.append(f"--- Bracket {bracket} / Stage {stage}: {counter} configs")
+        for rung in self._tracker.items():
+            messages.append(f"--- Rung {rung[0]}: {len(self._tracker[rung[0]].keys())} Configs")
 
         if len(messages) > 0:
             logger.debug(f"{self.__class__.__name__} statistics:")
 
         for message in messages:
-            logger.debug(message)
+            logger.info(message)
 
     def get_trials_of_interest(
             self,
@@ -309,13 +304,10 @@ class PASHA(AbstractIntensifier):
             Get rid of the budget information for comparing if the configuration was evaluated on the same
             instance-seed keys.
         """
-        isb_keys = self.runhistory.get_instance_seed_budget_keys(
-            config, highest_observed_budget_only=self._highest_observed_budget_only
-        )
-
-        # If incumbent should only be changed on the highest budget, we have to kick out all budgets below the highest
-        if self.uses_budgets and self._incumbent_selection == "highest_budget":
-            isb_keys = [key for key in isb_keys if key.budget == self._max_budget]
+        isb_keys = []
+        for rung in range(self._Kt):
+            if config in self._tracker[rung].keys():
+                isb_keys += [InstanceSeedBudgetKey(self._tracker[rung][config].instance, self._tracker[rung][config].seed, self._tracker[rung][config].budget)]
 
         if compare:
             # Get rid of duplicates
@@ -393,7 +385,8 @@ class PASHA(AbstractIntensifier):
             # TODO yield Job
             yield ti
 
-            #TODO set incumbent
+            # TODO set incumbent
+            """
             top = self._top_k(self._Kt, 1)
             if len(top) < 1:
                 top = self._top_k(self._Kt - 1, 1)
@@ -401,6 +394,7 @@ class PASHA(AbstractIntensifier):
                     self._incumbents = [top[0][0]]
             else:
                 self._incumbents = [top[0][0]]
+            """
             # TODO check if rung update is possible
 
             config_ranking = self._top_k(self._Kt, len(self._tracker[self._Kt].keys()))
@@ -411,6 +405,10 @@ class PASHA(AbstractIntensifier):
                     self._t += 1
                     self._Rt = (self._eta ** self._t) * self._eta * self._min_budget
                     self._Kt = math.floor(math.log(self._Rt / self._min_budget, self._eta))
+
+            # self.print_tracker()
+            logger.info(f"Incumbents: {len(self._incumbents)}")
+            logger.info(f"Trajectory: {len(self.trajectory)}")
 
     def _get_job(self):
         for rung in reversed(range(self._Kt)):
@@ -432,7 +430,7 @@ class PASHA(AbstractIntensifier):
             tk = TrialKey(config_id, rung_dict[entry].instance, rung_dict[entry].seed, rung_dict[entry].budget)
             value = self.runhistory[tk]
             if value.status == StatusType.SUCCESS:
-                ranking.append((entry, value.cost))
+                ranking.append((entry, value.cost, rung_dict[entry]))
         return sorted(ranking, key=lambda x: x[1])[:amount]
 
     def _get_instance_seed_budget_keys_by_stage(
