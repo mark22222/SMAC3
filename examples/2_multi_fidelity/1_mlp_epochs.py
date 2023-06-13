@@ -140,9 +140,8 @@ def plot_trajectory(facades: list[AbstractFacade]) -> None:
 
 if __name__ == "__main__":
     mlp = MLP()
-
     facades: list[AbstractFacade] = []
-    for intensifier_object in [PASHA]:
+    for intensifier_object in [PASHA, SuccessiveHalving]:
         # Define our environment variables
         scenario = Scenario(
             mlp.configspace,
@@ -160,12 +159,14 @@ if __name__ == "__main__":
         intensifier = intensifier_object(scenario, incumbent_selection="highest_budget")
 
         # Create our SMAC object and pass the scenario and the train method
+
         smac = MFFacade(
             scenario,
             mlp.train,
             initial_design=initial_design,
             intensifier=intensifier,
             overwrite=True,
+
         )
 
         # Let's optimize
