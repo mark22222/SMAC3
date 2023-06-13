@@ -307,7 +307,14 @@ class PASHA(AbstractIntensifier):
         isb_keys = []
         for rung in range(self._Kt):
             if config in self._tracker[rung].keys():
-                isb_keys += [InstanceSeedBudgetKey(self._tracker[rung][config].instance, self._tracker[rung][config].seed, self._tracker[rung][config].budget)]
+                entry = config
+                config_id = self.runhistory.get_config_id(entry)
+                rung_dict = self._tracker[rung]
+                tk = TrialKey(config_id, rung_dict[entry].instance, rung_dict[entry].seed, rung_dict[entry].budget)
+                value = self.runhistory[tk]
+                if value.status == StatusType.SUCCESS:
+                    isb_keys += [InstanceSeedBudgetKey(self._tracker[rung][config].instance, self._tracker[rung][config].seed, self._tracker[rung][config].budget)]
+                    break
 
         if compare:
             # Get rid of duplicates
