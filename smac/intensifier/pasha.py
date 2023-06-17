@@ -421,7 +421,7 @@ class PASHA(AbstractIntensifier):
         for rung in reversed(range(self._Kt)):
             candidates = self._top_k(rung, math.floor(len(self._tracker[rung].keys()) / self._eta))
             for cand in candidates:
-                if cand[0] not in self._tracker[rung + 1]:
+                if cand[0] not in self._tracker[rung + 1] and (self._Rt <= self._max_budget or rung < self._Kt -1):
                     return cand[0], rung + 1
         try:
             config = next(self.config_generator)
