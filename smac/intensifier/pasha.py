@@ -312,9 +312,8 @@ class PASHA(AbstractIntensifier):
                 rung_dict = self._tracker[rung]
                 tk = TrialKey(config_id, rung_dict[entry].instance, rung_dict[entry].seed, rung_dict[entry].budget)
                 value = self.runhistory[tk]
-                if value.status == StatusType.SUCCESS:
-                    isb_keys += [InstanceSeedBudgetKey(self._tracker[rung][config].instance, self._tracker[rung][config].seed, self._tracker[rung][config].budget)]
-                    break
+                isb_keys += [InstanceSeedBudgetKey(self._tracker[rung][config].instance, self._tracker[rung][config].seed, self._tracker[rung][config].budget)]
+                break
 
         if compare:
             # Get rid of duplicates
@@ -387,7 +386,10 @@ class PASHA(AbstractIntensifier):
             if config is None:  # Check if no more Configs are available
                 return
             is_key = self.get_instance_seed_keys_of_interest()[0]
-            ti = TrialInfo(config, is_key.instance, is_key.seed, self._min_budget * (self._eta ** rung))
+            budget = self._min_budget * (self._eta ** rung)
+            if budget > self._max_budget:
+                budget = self._max_budget
+            ti = TrialInfo(config, is_key.instance, is_key.seed, budget)
             self._tracker[rung][config] = ti
             # TODO yield Job
             yield ti
@@ -403,25 +405,28 @@ class PASHA(AbstractIntensifier):
                 self._incumbents = [top[0][0]]
             """
             # TODO check if rung update is possible
-
-            config_ranking = self._top_k(self._Kt, len(self._tracker[self._Kt].keys()))
-            config_ranking_below = self._top_k(self._Kt - 1, len(self._tracker[self._Kt - 1].keys()))[
-                                   :len(config_ranking)]
-            for config, config_below in zip(config_ranking, config_ranking_below):
-                if config != config_below:
-                    self._t += 1
-                    self._Rt = (self._eta ** self._t) * self._eta * self._min_budget
-                    self._Kt = math.floor(math.log(self._Rt / self._min_budget, self._eta))
+            if self._Rt < self._max_budget:
+                config_ranking = self._top_k(self._Kt, len(self._tracker[self._Kt].keys()))
+                config_ranking_below = self._top_k(self._Kt - 1, len(self._tracker[self._Kt - 1].keys()))[
+                                       :len(config_ranking)]
+                for config, config_below in zip(config_ranking, config_ranking_below):
+                    if config != config_below:
+                        self._t += 1
+                        self._Rt = (self._eta ** self._t) * self._eta * self._min_budget
+                        self._Kt = math.floor(math.log(self._Rt / self._min_budget, self._eta))
+                        print(f"Max Rung: {self._Kt}")
+                        print(f"Max Budget: {self._Rt}")
+                        break
 
             # self.print_tracker()
-            logger.info(f"Incumbents: {len(self._incumbents)}")
-            logger.info(f"Trajectory: {len(self.trajectory)}")
+            # logger.info(f"Incumbents: {len(self._incumbents)}")
+            # logger.info(f"Trajectory: {len(self.trajectory)}")
 
     def _get_job(self):
         for rung in reversed(range(self._Kt)):
             candidates = self._top_k(rung, math.floor(len(self._tracker[rung].keys()) / self._eta))
             for cand in candidates:
-                if cand[0] not in self._tracker[rung + 1] and (self._Rt <= self._max_budget or rung < self._Kt -1):
+                if cand[0] not in self._tracker[rung + 1]:
                     return cand[0], rung + 1
         try:
             config = next(self.config_generator)

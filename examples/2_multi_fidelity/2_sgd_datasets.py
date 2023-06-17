@@ -31,6 +31,8 @@ from smac import Scenario
 __copyright__ = "Copyright 2021, AutoML.org Freiburg-Hannover"
 __license__ = "3-clause BSD"
 
+from smac.intensifier.pasha import PASHA
+
 
 class DigitsDataset:
     def __init__(self) -> None:
@@ -122,11 +124,12 @@ if __name__ == "__main__":
         instances=dataset.get_instances(),
         instance_features=dataset.get_instance_features(),
     )
-
+    intesifier = PASHA(scenario, incumbent_selection="highest_budget")
     # Create our SMAC object and pass the scenario and the train method
     smac = MFFacade(
         scenario,
         model.train,
+        intensifier=intesifier,
         overwrite=True,
     )
 
