@@ -148,3 +148,5 @@ src
 # Pycharm
 .idea
 .vscode
+
+NATS-sss-v1_0-50262-simple/*

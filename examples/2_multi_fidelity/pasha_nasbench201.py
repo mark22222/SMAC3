@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 import warnings
+from pathlib import Path
 
 import numpy as np
 from ConfigSpace import Configuration, ConfigurationSpace
@@ -32,31 +33,47 @@ __copyright__ = "Copyright 2021, AutoML.org Freiburg-Hannover"
 __license__ = "3-clause BSD"
 
 from smac.intensifier.pasha import PASHA
-from nas_201_api import NASBench201API as API
+from nats_bench import create
 
 if __name__ == "__main__":
-    api = API('NAS-Bench-201-v1_1-096897.pth', verbose=False)
+    api = create(str(Path("..\\..\\NATS-sss-v1_0-50262-simple").resolve()),
+                 'sss',
+                 fast_mode=True,
+                 verbose=False)
+    validation_accuracy, latency, time_cost, current_total_time_cost = api.simulate_train_eval(1224, dataset='cifar10',
+                                                                                               hp='12')
 
+    print(validation_accuracy, latency, time_cost, current_total_time_cost)
+
+    print(len(api))
     configSpace = ConfigurationSpace({"A": (0, len(api)-1)})
-    api.show(1)
-    def train(config: Configuration, seed: int = 0):
+    #api.show(1)
+
+    time_tracker = []
+    def train(config: Configuration, seed: int = 0, budget: int = 12):
         #classifier = SVC(C=configSpace["C"], random_state=seed)
         #scores = cross_val_score(classifier, iris.data, iris.target, cv=5)
-        scores = cross_val_score
-        return 1 - np.mean(scores)
+        validation_accuracy, latency, time_cost, current_total_time_cost = api.simulate_train_eval(config["A"],
+                                                                                                   dataset='cifar100',
+                                                                                                   iepoch=budget,
+                                                                                                   hp="90")
+        time_tracker.append(time_cost)
+        return 100 - validation_accuracy
+
+
 
     scenario = Scenario(
         configSpace,
-        walltime_limit=30,  # We want to optimize for 30 seconds
-        n_trials=5000,  # We want to try max 5000 different trials
+        walltime_limit=15,  # We want to optimize for 30 seconds
+        n_trials=300,  # We want to try max 5000 different trials
         min_budget=1,  # Use min one instance
-        max_budget=45,  # Use max 45 instances (if we have a lot of instances we could constraint it here)
+        max_budget=89,  # Use max 45 instances (if we have a lot of instances we could constraint it here)
     )
-    intesifier = PASHA(scenario, incumbent_selection="highest_budget")
+    intesifier = PASHA(scenario, eta=2, incumbent_selection="highest_budget")
     # Create our SMAC object and pass the scenario and the train method
     smac = MFFacade(
         scenario,
-        model.train,
+        train,
         intensifier=intesifier,
         overwrite=True,
     )
@@ -64,8 +81,11 @@ if __name__ == "__main__":
     # Now we start the optimization process
     incumbent = smac.optimize()
 
-    default_cost = smac.validate(model.configspace.get_default_configuration())
+    default_cost = smac.validate(configSpace.get_default_configuration())
     print(f"Default cost: {default_cost}")
 
     incumbent_cost = smac.validate(incumbent)
     print(f"Incumbent cost: {incumbent_cost}")
+
+    print(time_tracker)
+    print(sum(time_tracker))
