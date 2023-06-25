@@ -409,8 +409,9 @@ class PASHA(AbstractIntensifier):
                 config_ranking = self._top_k(self._Kt, len(self._tracker[self._Kt].keys()))
                 config_ranking_below = self._top_k(self._Kt - 1, len(self._tracker[self._Kt - 1].keys()))[
                                        :len(config_ranking)]
+                #print(config_ranking, config_ranking_below)
                 for config, config_below in zip(config_ranking, config_ranking_below):
-                    if config != config_below:
+                    if config[0] != config_below[0]:
                         self._t += 1
                         self._Rt = (self._eta ** self._t) * self._eta * self._min_budget
                         self._Kt = math.floor(math.log(self._Rt / self._min_budget, self._eta))
