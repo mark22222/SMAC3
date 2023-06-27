@@ -38,12 +38,7 @@ class PASHA(AbstractIntensifier):
     As soon as there are eta (the reduction factor) configs in a rung, a promotion to the next rung can be made for the highest-ranked config.
     For any rung i, rung i+1 then contains 1/eta configs from rung i, for which new runs/Trials are then started using a higher budget etc.
     If we are running out of promotable configs, we simply add more configs to the lowest rung.
-    We stop if the ranking of configs in the two highest rungs has become consistent.
-
-    Note
-    ----
-    The implementation natively supports brackets from Hyperband. However, in the case of PASHA,
-    only one bracket is used.
+    Note, that the Promotion of a config is only done if the rankings inside a rung are unstable
 
     Parameters
     ----------
@@ -411,7 +406,7 @@ class PASHA(AbstractIntensifier):
     def _get_job(self):
         """Iterates over the (non-empty) rungs and returns a promotable config and the rung it will be promoted to
         (a job is a (config, rung) pair), if such a config currently exists.
-        A config is promotable iff its rank in its current rung is sufficiently high and if it's not yet present in the rung to be promoted to.
+        A config is promotable if and only if its rank in its current rung is sufficiently high and if it's not yet present in the rung to be promoted to.
         If there is no such config available, a random config is generated (if possible) for the lowest rung, rung 0.
         """
         for rung in reversed(range(self._Kt)):
