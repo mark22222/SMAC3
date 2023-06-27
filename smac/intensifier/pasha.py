@@ -27,28 +27,28 @@ logger = get_logger(__name__)
 
 class PASHA(AbstractIntensifier):
     """
-    Implementation of Succesive Halving supporting multi-fidelity, multi-objective, and multi-processing.
-    Internally, a tracker keeps track of configurations and their bracket and stage.
+    Implementation of Progressive Asynchronous Successive Halving Algorithm (PASHA).
+    This implementation alters and extends Successive Halving, which PASHA is based on.
+    Internally, a tracker keeps track of configurations and their stage (rung).
 
     The behaviour of this intensifier is as follows:
 
-    - First, adds configurations from the runhistory to the tracker. The first stage is always filled-up. For example,
-      the user provided 4 configs with the tell-method but the first stage requires 8 configs: 4 new configs are
-      sampled and added together with the provided configs as a group to the tracker.
-    - While loop:
-
-      - If a trial in the tracker has not been yielded yet, yield it.
-      - If we are running out of trials, we simply add a new batch of configurations to the first stage.
+    First, add random configurations (configs) to the lowest rung, rung 0. Trials evaluate these configs given a certain budget which
+    is dependent on the rung, a higher rung meaning a higher budget. Configs are ranked by the cost returned by the trials.
+    As soon as there are eta (the reduction factor) configs in a rung, a promotion to the next rung can be made for the highest-ranked config.
+    For any rung i, rung i+1 then contains 1/eta configs from rung i, for which new runs/Trials are then started using a higher budget etc.
+    If we are running out of promotable configs, we simply add more configs to the lowest rung.
+    We stop if the ranking of configs in the two highest rungs has become consistent.
 
     Note
     ----
-    The implementation natively supports brackets from Hyperband. However, in the case of Successive Halving,
+    The implementation natively supports brackets from Hyperband. However, in the case of PASHA,
     only one bracket is used.
 
     Parameters
     ----------
     eta : int, defaults to 3
-        Input that controls the proportion of configurations discarded in each round of Successive Halving.
+        The reduction factor. It controls the proportion of configurations kept going from one rung to the next
     n_seeds : int, defaults to 1
         How many seeds to use for each instance.
     instance_seed_order : str, defaults to "shuffle_once"
@@ -63,8 +63,6 @@ class PASHA(AbstractIntensifier):
         - `any_budget`: Incumbent is the best on any budget i.e., best performance regardless of budget.
         - `highest_observed_budget`: Incumbent is the best in the highest budget run so far.
         - `highest_budget`: Incumbent is selected only based on the highest budget.
-    max_incumbents : int, defaults to 10
-        How many incumbents to keep track of in the case of multi-objective.
     seed : int, defaults to None
         Internal seed used for random events like shuffle seeds.
     """
@@ -75,14 +73,12 @@ class PASHA(AbstractIntensifier):
             eta: int = 3,
             n_seeds: int = 1,
             instance_seed_order: str | None = "shuffle_once",
-            max_incumbents: int = 10,
             incumbent_selection: str = "highest_observed_budget",
             seed: int | None = None,
     ):
         super().__init__(
             scenario=scenario,
             n_seeds=n_seeds,
-            max_incumbents=max_incumbents,
             seed=seed,
         )
 
@@ -95,8 +91,11 @@ class PASHA(AbstractIntensifier):
         self._min_budget = self._scenario.min_budget
         self._max_budget = self._scenario.max_budget
 
+        # Tracking the current maximum resources
         self._Rt = eta * self._min_budget
+        # Tracking the current maximum rung
         self._Kt = math.floor(math.log(self._Rt / self._min_budget, eta))
+        # Tracking the rung index
         self._t = 0
 
     @property
@@ -116,12 +115,8 @@ class PASHA(AbstractIntensifier):
         """Reset the internal variables of the intensifier including the tracker."""
         super().reset()
 
-        # States
-        # dict[tuple[bracket, stage], list[tuple[seed to shuffle instance-seed keys, list[config_id]]]
+        # This tracker records all (rung, (config, trial)) key-value pairs.
         self._tracker: dict[int, dict[Configuration, TrialInfo]] = defaultdict(dict)
-        # self._Rt = self._eta * self._min_budget
-        # self._Kt = math.floor(math.log(self._Rt / self._min_budget, self._eta))
-        # self._t = 0
 
     def __post_init__(self) -> None:
         """Post initialization steps after the runhistory has been set."""
@@ -140,7 +135,7 @@ class PASHA(AbstractIntensifier):
 
         if self.uses_instances:
             if isinstance(min_budget, float) or isinstance(max_budget, float):
-                raise ValueError("Successive Halving requires integer budgets when using instances.")
+                raise ValueError("PASHA requires integer budgets when using instances.")
 
             min_budget = min_budget if min_budget is not None else 1
             max_budget = max_budget if max_budget is not None else len(is_keys)
@@ -158,22 +153,22 @@ class PASHA(AbstractIntensifier):
         else:
             if min_budget is None or max_budget is None:
                 raise ValueError(
-                    "Successive Halving requires the parameters min_budget and max_budget defined in the scenario."
+                    "PASHA requires the parameters min_budget and max_budget defined in the scenario."
                 )
 
             if len(is_keys) != 1:
-                raise ValueError("Successive Halving supports only one seed when using budgets.")
+                raise ValueError("PASHA supports only one seed when using budgets.")
 
         if min_budget is None or min_budget <= 0:
             raise ValueError("Min budget has to be larger than 0.")
 
         budget_type = "INSTANCES" if self.uses_instances else "BUDGETS"
         logger.info(
-            f"Successive Halving uses budget type {budget_type} with eta {eta}, "
+            f"PASHA uses budget type {budget_type} with eta {eta}, "
             f"min budget {min_budget}, and max budget {max_budget}."
         )
 
-        # Pre-computing Successive Halving variables
+        # Pre-computing variables
         max_iter = self._get_max_iterations(eta, max_budget, min_budget)
         budgets, n_configs = self._compute_configs_and_budgets_for_stages(eta, max_budget, max_iter)
 
@@ -181,7 +176,7 @@ class PASHA(AbstractIntensifier):
         self._min_budget = min_budget
         self._max_budget = max_budget
 
-        # Stage variables, depending on the bracket (0 is the bracket here since SH only has one bracket)
+        # Stage variables, depending on the bracket (0 is the bracket here since PASHA only has one bracket)
         self._max_iterations: dict[int, int] = {0: max_iter + 1}
         self._n_configs_in_stage: dict[int, list] = {0: n_configs}
         self._budgets_in_stage: dict[int, list] = {0: budgets}
@@ -376,40 +371,34 @@ class PASHA(AbstractIntensifier):
                 self._tracker[(bracket, stage)].append((seed, configs))
                 logger.info(
                     f"Added {n_rh_configs} configs from runhistory and {n_configs - n_rh_configs} new configs to "
-                    f"Successive Halving's first bracket and first stage with order seed {seed}."
+                    f"PASHA's first bracket and first stage with order seed {seed}."
                 )
 
         while True:
-
-            # TODO get_job()
+            
+            # Obtain a job - a (config, rung) pair.
             config, rung = self._get_job()
-            if config is None:  # Check if no more Configs are available
+            if config is None:
+                # No config was promotable nor were we able to generate a new, random config.
                 return
             is_key = self.get_instance_seed_keys_of_interest()[0]
+            # The resources (the budget) that is available to the job's config. 
             budget = self._min_budget * (self._eta ** rung)
             if budget > self._max_budget:
+                # Cap the budget up to the maximum budget.
                 budget = self._max_budget
+            # Instantiate a trial. It is then yielded for computation.
             ti = TrialInfo(config, is_key.instance, is_key.seed, budget)
+
             self._tracker[rung][config] = ti
-            # TODO yield Job
+
             yield ti
 
-            # TODO set incumbent
-            """
-            top = self._top_k(self._Kt, 1)
-            if len(top) < 1:
-                top = self._top_k(self._Kt - 1, 1)
-                if len(top) > 0:
-                    self._incumbents = [top[0][0]]
-            else:
-                self._incumbents = [top[0][0]]
-            """
-            # TODO check if rung update is possible
+            # Check if a rung update is possible.
             if self._Rt < self._max_budget:
                 config_ranking = self._top_k(self._Kt, len(self._tracker[self._Kt].keys()))
                 config_ranking_below = self._top_k(self._Kt - 1, len(self._tracker[self._Kt - 1].keys()))[
                                        :len(config_ranking)]
-                #print(config_ranking, config_ranking_below)
                 for config, config_below in zip(config_ranking, config_ranking_below):
                     if config[0] != config_below[0]:
                         self._t += 1
@@ -419,14 +408,16 @@ class PASHA(AbstractIntensifier):
                         print(f"Max Budget: {self._Rt}")
                         break
 
-            # self.print_tracker()
-            # logger.info(f"Incumbents: {len(self._incumbents)}")
-            # logger.info(f"Trajectory: {len(self.trajectory)}")
-
     def _get_job(self):
+        """Iterates over the (non-empty) rungs and returns a promotable config and the rung it will be promoted to
+        (a job is a (config, rung) pair), if such a config currently exists.
+        A config is promotable iff its rank in its current rung is sufficiently high and if it's not yet present in the rung to be promoted to.
+        If there is no such config available, a random config is generated (if possible) for the lowest rung, rung 0.
+        """
         for rung in reversed(range(self._Kt)):
             candidates = self._top_k(rung, math.floor(len(self._tracker[rung].keys()) / self._eta))
             for cand in candidates:
+                # Across a single rung, all configs within it are unique.
                 if cand[0] not in self._tracker[rung + 1]:
                     return cand[0], rung + 1
         try:
@@ -436,12 +427,16 @@ class PASHA(AbstractIntensifier):
         return config, 0
 
     def _top_k(self, rung, amount):
+        """Returns the <amount> highest ranked configs for a given rung, sorted by rank.
+        """
+        # Extract all (config, trial) pairs for this rung.
         rung_dict = self._tracker[rung]
         ranking = []
         for entry in rung_dict:
             config_id = self.runhistory.get_config_id(entry)
             tk = TrialKey(config_id, rung_dict[entry].instance, rung_dict[entry].seed, rung_dict[entry].budget)
             value = self.runhistory[tk]
+            # We are interested in trials that have terminated, as they possess a cost to be ranked.
             if value.status == StatusType.SUCCESS:
                 ranking.append((entry, value.cost, rung_dict[entry]))
         return sorted(ranking, key=lambda x: x[1])[:amount]
@@ -565,5 +560,5 @@ class PASHA(AbstractIntensifier):
         return seed
 
     def _get_next_bracket(self) -> int:
-        """Successive Halving only uses one bracket. Therefore, we always return 0 here."""
+        """PASHA only uses one bracket. Therefore, we always return 0 here."""
         return 0

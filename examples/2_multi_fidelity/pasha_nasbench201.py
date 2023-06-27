@@ -1,30 +1,20 @@
 """
-Stochastic Gradient Descent On Multiple Datasets
+Progressive Asynchronous Successive Halving Algorithm (PASHA) On Image Datasets
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Example for optimizing a Multi-Layer Perceptron (MLP) across multiple (dataset) instances.
+Example for finding model (hyperparameter) configurations yielding high accuracy using PASHA,
+evaluated seperately on three NASBench201 datasets (CIFAR-10, CIFAR-100, ImageNet16-120).
 
-Alternative to budgets, here wlog. we consider instances as a fidelity type. An instance represents a specific
-scenario/condition (e.g. different datasets, subsets, transformations) for the algorithm to run. SMAC then returns the
-algorithm that had the best performance across all the instances. In this case, an instance is a binary dataset i.e.,
-digit-2 vs digit-3.
-
-If we use instance as our fidelity, we need to initialize scenario with argument instance. In this case the argument
-budget is no longer required by the target function. But due to the scenario instance argument,
-the target function now is required to have an instance argument.
+The NATS-Bench library and benchmark files were used in order to benchmark these NAS algorithms in Python.
 """
 
 from __future__ import annotations
 
-import itertools
-import warnings
 from pathlib import Path
 
 import numpy as np
 from ConfigSpace import Configuration, ConfigurationSpace
 from sklearn import datasets
-from sklearn.linear_model import SGDClassifier
-from sklearn.model_selection import StratifiedKFold, cross_val_score
 import pandas as pd
 
 
@@ -39,14 +29,15 @@ from nats_bench import create
 
 if __name__ == "__main__":
 
+    # Prepare seeds for PASHA to be evaluated on different SMAC configurations.
     seeds = [i for i in range(10)]
     datasets = ['cifar10', 'cifar100', 'ImageNet16-120']
+    # Create an API for the Topology Search Space (TSS) using the corresponding benchmark.
     api = create(str(Path("..\\..\\NATS-tss-v1_0-3ffb9-simple").resolve()),
                  'tss',
                  fast_mode=True,
                  verbose=False)
 
-    #print(len(api))
     configSpace = ConfigurationSpace({"A": (0, len(api)-1)})
 
     experiment_dataframe = pd.DataFrame(columns=["Dataset", "Seed", "Incumbent", "Incumbent Cost", "Runtime", "Default Cost"])
